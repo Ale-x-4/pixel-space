@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Pixel Space Startup</title>
+    <style>
+        /* Подключаем современные шрифты */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&family=Roboto+Mono&display=swap');
+
+        body { 
+            margin: 0; padding: 0; overflow: hidden; 
+            background: #0d1117; 
+            font-family: 'Inter', sans-serif; 
+            color: white;
+        }
+        
+        canvas { display: block; cursor: grab; }
+        canvas:active { cursor: grabbing; }
+
+        .controls { 
+            position: fixed; top: 20px; right: 20px; 
+            background: rgba(23, 28, 35, 0.8); 
+            backdrop-filter: blur(12px); 
+            padding: 20px; 
+            border-radius: 16px; 
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+            width: 220px;
+            z-index: 100;
+        }
+
+        h3 { 
+            margin: 0 0 15px 0; 
+            color: #58a6ff; 
+            font-size: 14px; 
+            font-weight: 700;
+            text-transform: uppercase; 
+            letter-spacing: 1.5px;
+        }
+
+        label { font-size: 10px; color: #8b949e; text-transform: uppercase; font-weight: 700; margin-bottom: 4px; display: block; }
+
+        .stat-val { font-family: 'Roboto Mono', monospace; color: #58a6ff; font-weight: bold; }
+
+        input[type="text"] {
+            width: 100%; background: #161b22; border: 1px solid #30363d;
+            color: white; padding: 10px; border-radius: 8px; margin-bottom: 15px;
+            transition: border-color 0.2s; box-sizing: border-box;
+        }
+        input[type="text"]:focus { border-color: #58a6ff; outline: none; }
+
+        input[type="color"] {
+            border: none; width: 100%; height: 35px; cursor: pointer;
+            background: none; margin: 5px 0 15px 0;
+        }
+
+        button {
+            width: 100%; background: linear-gradient(135deg, #238636 0%, #2ea043 100%);
+            color: white; border: none; padding: 12px; border-radius: 8px;
+            font-weight: 700; cursor: pointer;
+            transition: transform 0.1s, box-shadow 0.2s;
+        }
+        button:hover { 
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(35, 134, 54, 0.4);
+        }
+        button:active { transform: translateY(0); }
+
+        .stat-line { display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 8px; }
+        
+        #tooltip {
+            position: absolute; background: rgba(0, 0, 0, 0.85); color: white;
+            padding: 8px 12px; border-radius: 6px; font-size: 12px;
+            display: none; pointer-events: none; z-index: 10;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="tooltip"></div>
+    <canvas id="gridCanvas"></canvas>
+
+    <div class="controls">
+        <h3>Pixel Space</h3>
+        <div class="stat-line"><span>Координаты:</span><span id="coords" class="stat-val">0, 0</span></div>
+        <div class="stat-line"><span>Масштаб:</span><span id="zoom-level" class="stat-val">100%</span></div>
+        <div class="stat-line" style="margin-top:10px; border-top: 1px solid #30363d; padding-top:10px;">
+            <span>Стоимость:</span><span id="price-val" class="stat-val" style="color: #3fb950; font-size: 16px;">0.5$</span>
+        </div>
+        
+        <br>
+        <label>Цвет пикселя</label>
+        <input type="color" id="pixelColor" value="#3498db">
+        
+        <label>Твоя ссылка</label>
+        <input type="text" id="pixelLink" placeholder="https://...">
+        
+        <button onclick="resetView()">В ЦЕНТР</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gridCanvas');
+        const ctx = canvas.getContext('2d');
+        const tooltip = document.getElementById('tooltip');
+
+        const worldCellSize = 50;
+        let camera = { x: 0, y: 0, zoom: 1 };
+        let pixels = JSON.parse(localStorage.getItem('worldPixels')) || [];
+
+        let isDragging = false;
+        let dragStart = { x: 0, y: 0 };
+        let lastCameraState = { x: 0, y: 0 };
+        
+        // НОВОЕ: Переменные для хранения позиции мыши
+        let lastMouseX = 0;
+        let lastMouseY = 0;
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            draw();
+        }
+        window.addEventListener('resize', resizeCanvas);
+
+        function draw() {
+            ctx.save();
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            ctx.translate(canvas.width/2 + camera.x, canvas.height/2 + camera.y);
+            ctx.scale(camera.zoom, camera.zoom);
+
+            // 1. Сетка
+            ctx.beginPath();
+            ctx.strokeStyle = '#21262d'; 
+            ctx.lineWidth = 0.5 / camera.zoom;
+            const gridSize = 5000; 
+            for (let x = -gridSize; x <= gridSize; x += worldCellSize) {
+                ctx.moveTo(x, -gridSize); ctx.lineTo(x, gridSize);
+            }
+            for (let y = -gridSize; y <= gridSize; y += worldCellSize) {
+                ctx.moveTo(-gridSize, y); ctx.lineTo(gridSize, y);
+            }
+            ctx.stroke();
+
+            // 2. Районы
+            ctx.lineWidth = 1 / camera.zoom;
+            ctx.strokeStyle = "rgba(88, 166, 255, 0.15)";
+            ctx.beginPath(); ctx.arc(0, 0, 500, 0, Math.PI * 2); ctx.stroke();
+            ctx.beginPath(); ctx.arc(0, 0, 1500, 0, Math.PI * 2); ctx.stroke();
+
+            // 3. НОВОЕ: Подсветка под курсором (Ховер)
+            if (!isDragging) {
+                const worldPos = screenToWorld(lastMouseX, lastMouseY);
+                const hX = snapToGrid(worldPos.x);
+                const hY = snapToGrid(worldPos.y);
+                ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
+                ctx.fillRect(hX, hY, worldCellSize, worldCellSize);
+            }
+
+            // 4. Пиксели
+            pixels.forEach(p => {
+                ctx.fillStyle = p.color || "#3498db";
+                ctx.fillRect(p.worldX, p.worldY, worldCellSize, worldCellSize);
+            });
+
+            ctx.restore();
+            document.getElementById('zoom-level').innerText = `${Math.round(camera.zoom * 100)}%`;
+        }
+
+        function getPrice(worldX, worldY) {
+            const distance = Math.sqrt(worldX * worldX + worldY * worldY);
+            if (distance < 500) return 4;
+            if (distance < 1500) return 2;
+            return 0.5;
+        }
+
+        function screenToWorld(screenX, screenY) {
+            return {
+                x: (screenX - canvas.width/2 - camera.x) / camera.zoom,
+                y: (screenY - canvas.height/2 - camera.y) / camera.zoom
+            };
+        }
+
+        function snapToGrid(coord) {
+            return Math.floor(coord / worldCellSize) * worldCellSize;
+        }
+
+        function resetView() {
+            camera = { x: 0, y: 0, zoom: 1 };
+            draw();
+        }
+
+        function handleDragStart(e) {
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            if (e.target.closest('.controls')) return;
+            isDragging = true;
+            dragStart = { x: clientX, y: clientY };
+            lastCameraState = { x: camera.x, y: camera.y };
+            tooltip.style.display = 'none';
+        }
+
+        function handleDragMove(e) {
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            
+            // Запоминаем позицию мыши для ховера
+            lastMouseX = clientX;
+            lastMouseY = clientY;
+
+            if (!isDragging && !e.touches) { 
+                const worldPos = screenToWorld(clientX, clientY);
+                const gridX = snapToGrid(worldPos.x);
+                const gridY = snapToGrid(worldPos.y);
+                
+                document.getElementById('coords').innerText = `${gridX/worldCellSize}, ${gridY/worldCellSize}`;
+                const currentPrice = getPrice(gridX, gridY);
+                document.getElementById('price-val').innerText = currentPrice + '$';
+
+                const pixel = pixels.find(p => p.worldX === gridX && p.worldY === gridY);
+                if (pixel) {
+                    tooltip.style.display = 'block';
+                    tooltip.style.left = (clientX + 15) + 'px';
+                    tooltip.style.top = (clientY + 15) + 'px';
+                    tooltip.innerText = `Занято: ${pixel.link || 'без ссылки'}`;
+                } else {
+                    tooltip.style.display = 'none';
+                }
+            }
+
+            if (isDragging) {
+                if (e.touches && e.touches.length >= 2) return;
+                const dx = clientX - dragStart.x;
+                const dy = clientY - dragStart.y;
+                camera.x = lastCameraState.x + dx;
+                camera.y = lastCameraState.y + dy;
+            }
+            requestAnimationFrame(draw);
+        }
+
+        function handleDragEnd(e) {
+            if (isDragging) {
+                const clientX = e.changedTouches ? e.changedTouches[0].clientX : e.clientX;
+                const clientY = e.changedTouches ? e.changedTouches[0].clientY : e.clientY;
+                const dx = Math.abs(clientX - dragStart.x);
+                const dy = Math.abs(clientY - dragStart.y);
+                if (dx < 5 && dy < 5) handleCanvasClick(clientX, clientY);
+            }
+            isDragging = false;
+        }
+
+        function handleCanvasClick(clientX, clientY) {
+            const worldPos = screenToWorld(clientX, clientY);
+            const gridX = snapToGrid(worldPos.x);
+            const gridY = snapToGrid(worldPos.y);
+            const currentPrice = getPrice(gridX, gridY);
+
+            const existingPixel = pixels.find(p => p.worldX === gridX && p.worldY === gridY);
+            if (existingPixel) {
+                if (existingPixel.link) {
+                    const url = existingPixel.link.startsWith('http') ? existingPixel.link : 'https://' + existingPixel.link;
+                    window.open(url, '_blank');
+                }
+            } else {
+                if(confirm(`Эта клетка стоит ${currentPrice}$. Купить?`)) {
+                    const color = document.getElementById('pixelColor').value;
+                    const link = document.getElementById('pixelLink').value;
+                    pixels.push({ worldX: gridX, worldY: gridY, color, link, price: currentPrice });
+                    localStorage.setItem('worldPixels', JSON.stringify(pixels));
+                    draw();
+                }
+            }
+        }
+
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const zoomSpeed = 0.15;
+            const delta = e.deltaY > 0 ? -zoomSpeed : zoomSpeed;
+            const oldZoom = camera.zoom;
+            camera.zoom = Math.min(Math.max(0.1, camera.zoom + delta), 5);
+
+            if (oldZoom !== camera.zoom) {
+                const worldPos = screenToWorld(e.clientX, e.clientY);
+                camera.x -= (worldPos.x * (camera.zoom - oldZoom));
+                camera.y -= (worldPos.y * (camera.zoom - oldZoom));
+                requestAnimationFrame(draw);
+            }
+        }, { passive: false });
+
+        canvas.addEventListener('mousedown', handleDragStart);
+        window.addEventListener('mousemove', handleDragMove);
+        window.addEventListener('mouseup', handleDragEnd);
+        canvas.addEventListener('touchstart', handleDragStart);
+        canvas.addEventListener('touchmove', handleDragMove, { passive: false });
+        canvas.addEventListener('touchend', handleDragEnd);
+
+        resizeCanvas();
+    </script>
+</body>
+</html>
